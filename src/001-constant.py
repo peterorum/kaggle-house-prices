@@ -1,5 +1,5 @@
 # baseline: constant price 200000
-# kaggle score 0.1886
+# kaggle score 0.46217
 
 import sys  # pylint: disable=unused-import
 import numpy as np
