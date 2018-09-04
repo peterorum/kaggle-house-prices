@@ -1,0 +1,8 @@
+#!/bin/sh
+
+if [ -z "$1" ]; then
+    echo "Add message"
+    exit 1
+fi
+
+kaggle competitions submit -c house-prices-advanced-regression-techniques -f submission.csv  -m "$1"
