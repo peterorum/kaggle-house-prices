@@ -1,7 +1,7 @@
 # linear regression
-# lot area
-# minimize score
+# lot area 0.388
 # kaggle score 0.416
+# minimize score
 
 import os
 import sys  # pylint: disable=unused-import
@@ -33,8 +33,10 @@ y_train = train[target]
 linreg = LinearRegression()
 linreg.fit(x_train, y_train)
 
-# score = np.sqrt(mean_squared_error(train[target], train.predicted))
-# print('score', score)
+train['predicted'] = linreg.predict(x_train)
+
+score = np.sqrt(mean_squared_error(np.log(train[target]), np.log(train.predicted)))
+print('score', score)
 
 x_test = test[x_train.columns]
 predicted = linreg.predict(x_test)
