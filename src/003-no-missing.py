@@ -8,7 +8,6 @@ from time import time
 import numpy as np  # pylint: disable=unused-import
 import pandas as pd
 from sklearn.metrics import mean_squared_error
-from sklearn.linear_model import LinearRegression
 import lightgbm as lgb
 
 pd.options.display.float_format = '{:.4f}'.format
