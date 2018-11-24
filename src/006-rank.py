@@ -1,12 +1,14 @@
-# feature generation & selection
+# rank columns
 # sample
 # full
-# kaggle 0.14481
+# kaggle
 # minimize score
 
+from datetime import datetime
+import gc
 import os
-import json
-import sys  # pylint: disable=unused-import
+import re  # noqa
+import sys  # noqa
 from time import time
 import csv
 from pprint import pprint  # pylint: disable=unused-import
@@ -14,17 +16,20 @@ from timeit import default_timer as timer
 import lightgbm as lgb
 import numpy as np
 from hyperopt import STATUS_OK, fmin, hp, tpe, Trials
+import pytz
 import pandas as pd
-from pandas.io.json import json_normalize
+from psutil import virtual_memory
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold, train_test_split
-from sklearn.preprocessing import LabelEncoder
+# from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 from sklearn.preprocessing import PolynomialFeatures
+
 
 pd.options.display.float_format = '{:.4f}'.format
 pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 2000)
 
 is_kaggle = os.environ['HOME'] == '/tmp'
 
@@ -40,14 +45,13 @@ trials = Trials()
 
 optimized_params = {
     'class_weight': None,
-    'colsample_bytree': 1.0,
-    'learning_rate': 0.1,
-    'min_child_samples': 20,
-    'num_leaves': 31,
-    'reg_alpha': 0.0,
-    'reg_lambda': 0.0,
-    'subsample_for_bin': 20000
-}
+    'colsample_bytree': 0.9571576967509944,
+    'learning_rate': 0.0740494277841095,
+    'min_child_samples': 150,
+    'num_leaves': 107,
+    'reg_alpha': 0.6292694233464933,
+    'reg_lambda': 0.7740308128390287,
+    'subsample_for_bin': 160000}
 
 zipext = '' if is_kaggle else '.zip'
 
@@ -55,8 +59,6 @@ zipext = '' if is_kaggle else '.zip'
 n_folds = 10
 stop_rounds = 100
 verbose_eval = -1  # 500
-
-# https://www.kaggle.com/julian3833/1-quick-start-read-csv-and-flatten-json-fields
 
 
 def evaluate(params):
@@ -99,7 +101,11 @@ def evaluate(params):
                       verbose=False, early_stopping_rounds=stop_rounds)
 
         # pprint(dir(lgb_model))
-        best_score += lgb_model.best_score_['valid_1']['rmse']
+        # best_score += lgb_model.best_score_['valid_1']['rmse']
+
+        lgb_train_prediction = lgb_model.predict(X_train)
+
+        best_score += np.sqrt(mean_squared_error(np.log(Y_train), np.log(lgb_train_prediction)))
 
         lgb_test_prediction = lgb_model.predict(x_test, num_iteration=lgb_model.best_iteration_)
         test_predictions += lgb_test_prediction
@@ -108,7 +114,7 @@ def evaluate(params):
             # linear regression
             lr_model.fit(X_train, Y_train)
             train_prediction = lr_model.predict(X_train)
-            best_score += np.sqrt(mean_squared_error(train_prediction, Y_train))
+            best_score += np.sqrt(mean_squared_error(np.log(train_prediction), np.log(Y_train)))
 
             lr_test_prediction = lr_model.predict(x_test)
             test_predictions += lr_test_prediction
@@ -151,6 +157,30 @@ def objective(params):
             'train_time': run_time, 'status': STATUS_OK}
 
 
+# add dates
+def get_expand_dates(train, test, columns):
+
+    for col in columns:
+        train = expand_dates(train, col)
+        test = expand_dates(test, col)
+
+    return train, test
+
+
+def expand_dates(data, column):
+
+    data[column + '_year'] = data[column].apply(lambda x: x.year)
+    data[column + '_month'] = data[column].apply(lambda x: x.month)
+    data[column + '_day'] = data[column].apply(lambda x: x.day)
+    data[column + '_hour'] = data[column].apply(lambda x: x.hour)
+    data[column + '_weekday'] = data[column].apply(lambda x: x.weekday())
+    data[column + '_weekofyear'] = data[column].apply(lambda x: x.weekofyear if hasattr(x, 'weekofyear') else np.nan)
+
+    data.drop(column, axis=1, inplace=True)
+
+    return data
+
+
 # polynomial features
 
 
@@ -159,15 +189,18 @@ def get_polynomial_features(train, test, target):
     # Make a new dataframe for polynomial features
 
     numeric_cols = [col for col in train.columns
-                    if (col != target) & (col != unique_id) & ((train[col].dtype == 'int64') | (train[col].dtype == 'float64'))]
+                    if (col != target) & (col != unique_id) & (col != target) &
+                    ((train[col].dtype == 'int64') | (train[col].dtype == 'float64'))]
 
     poly_features = train[numeric_cols]
     poly_features_test = test[numeric_cols]
 
-    poly_target = train_targets
+    poly_target = train[target]
+
+    poly_degrees = 2
 
     # Create the polynomial object with specified degree
-    poly_transformer = PolynomialFeatures(degree=2)
+    poly_transformer = PolynomialFeatures(degree=poly_degrees)
 
     # Train the polynomial features
     poly_transformer.fit(poly_features)
@@ -187,7 +220,7 @@ def get_polynomial_features(train, test, target):
     poly_features[target] = poly_target
 
     # Find the correlations with the target
-    poly_corrs = poly_features.corr()[target].sort_values()
+    # poly_corrs = poly_features.corr()[target].sort_values()
 
     # Display most negative and most positive
     # print(poly_corrs.head(10))
@@ -217,8 +250,6 @@ def get_polynomial_features(train, test, target):
     # print('Training data with polynomial features shape: ', train_poly.shape)
     # print('Testing data with polynomial features shape:  ', test_poly.shape)
 
-    # train_poly, test_poly = get_collinear_features(train_poly, test_poly, target)
-
     return train_poly, test_poly
 
 # arithmetic features
@@ -231,28 +262,46 @@ def get_arithmetic_features(train, test, target):
 
     numeric_cols.remove(unique_id)
 
+    if target in numeric_cols:
+        numeric_cols.remove(target)
+
     for i1 in range(0, len(numeric_cols)):
         col1 = numeric_cols[i1]
         for i2 in range(i1 + 1, len(numeric_cols)):
             col2 = numeric_cols[i2]
 
-            # train[f'{col1} by {col2}'] = train[col1] * train[col2]
-            # test[f'{col1} by {col2}'] = test[col1] * test[col2]
+            train[f'{col1} by {col2}'] = train[col1] * train[col2]
+            test[f'{col1} by {col2}'] = test[col1] * test[col2]
 
-            # train[f'{col1} plus {col2}'] = train[col1] + train[col2]
-            # test[f'{col1} plus {col2}'] = test[col1] + test[col2]
+            train[f'{col1} plus {col2}'] = train[col1] + train[col2]
+            test[f'{col1} plus {col2}'] = test[col1] + test[col2]
 
             train[f'{col1} minus {col2}'] = train[col1] - train[col2]
             test[f'{col1} minus {col2}'] = test[col1] - test[col2]
 
-            # if not (train[col2] == 0).any():
-            #     train[f'{col1} on {col2}'] = train[col1] / train[col2]
-            #     test[f'{col1} on {col2}'] = test[col1] / test[col2]
-            # elif not (train[col1] == 0).any():
-            #     train[f'{col2} on {col1}'] = train[col2] / train[col1]
-            #     test[f'{col2} on {col1}'] = test[col2] / test[col1]
+            if not (train[col2] == 0).any():
+                train[f'{col1} on {col2}'] = train[col1] / train[col2]
+                test[f'{col1} on {col2}'] = test[col1] / test[col2]
+            elif not (train[col1] == 0).any():
+                train[f'{col2} on {col1}'] = train[col2] / train[col1]
+                test[f'{col2} on {col1}'] = test[col2] / test[col1]
 
-    train, test = get_collinear_features(train, test, target)
+    return train, test
+
+# log features
+
+
+def get_log_features(train, test, target):
+
+    numeric_cols = [col for col in train.columns
+                    if (train[col].dtype == 'int64') | (train[col].dtype == 'float64')]
+
+    numeric_cols.remove(unique_id)
+    numeric_cols.remove(target)
+
+    for col in numeric_cols:
+        train[f'log_{col}'] = train[col].apply(lambda x: np.log1p(x) if x >= 0 else 0)
+        test[f'log_{col}'] = test[col].apply(lambda x: np.log1p(x) if x >= 0 else 0)
 
     return train, test
 
@@ -265,6 +314,15 @@ def get_collinear_features(train, test, target):
 
     # Select columns with correlations above threshold
     to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
+
+    if target in to_drop:
+        to_drop.remove(target)
+
+    if unique_id in to_drop:
+        to_drop.remove(unique_id)
+
+    # print('collinear drop')
+    # pprint(to_drop)
 
     train = train.drop(columns=to_drop)
     test = test.drop(columns=to_drop)
@@ -293,6 +351,9 @@ def get_missing_values(train, test, target):
 
     train, test = train.align(test, join='inner', axis=1)
 
+    # restore after align
+    train[target] = train_targets
+
     return train, test
 
 
@@ -304,7 +365,10 @@ def get_feature_importance(train, test, target):
     x_train = train.drop(target_key, axis=1)
 
     if unique_id in x_train.columns:
-        x_train = train.drop(target_key, axis=1)
+        x_train = x_train.drop(unique_id, axis=1)
+
+    if target in x_train.columns:
+        x_train = x_train.drop(target, axis=1)
 
     # Initialize an empty array to hold feature importances
     feature_importances = np.zeros(x_train.shape[1])
@@ -313,7 +377,7 @@ def get_feature_importance(train, test, target):
     for i in range(2):
 
         # Split into training and validation set
-        train_features, valid_features, train_y, valid_y = train_test_split(x_train, train_targets,
+        train_features, valid_features, train_y, valid_y = train_test_split(x_train, train[target],
                                                                             test_size=0.25, random_state=i)
 
         # Train using early stopping
@@ -343,15 +407,15 @@ def get_feature_importance(train, test, target):
     # unimportant_features = list(feature_importances[feature_importances['importance'] == 0.0]['feature'])
 
     # Threshold for cumulative importance
-    threshold = 0.99
+    threshold = 0.9996
 
     # Extract the features to drop
 
     features_to_drop = list(feature_importances[feature_importances[
         'cumulative_importance'] > threshold]['feature'])
 
-    # print(f'There are {len(features_to_drop)} features under {threshold} importance')
-    # print(features_to_drop)
+    # print(f'there are {len(features_to_drop)} features under {threshold} importance')
+    # pprint(features_to_drop)
 
     train = train.drop(features_to_drop, axis=1)
     test = test.drop(features_to_drop, axis=1)
@@ -360,12 +424,12 @@ def get_feature_importance(train, test, target):
 
 
 def get_feature_selection(train, test, target):
-    # remove collinear variables
-    train, test = get_collinear_features(train, test, target)
-    print(f'collinear, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
 
     all_numeric_cols = [col for col in train.columns
-                        if (col != unique_id) & (train[col].dtype == 'int64') | (train[col].dtype == 'float64')]
+                        if (train[col].dtype == 'int64') | (train[col].dtype == 'float64')]
+
+    if unique_id in all_numeric_cols:
+        all_numeric_cols.remove(unique_id)
 
     # feature selection via variance
     train_numeric = train[all_numeric_cols].fillna(0)
@@ -376,21 +440,62 @@ def get_feature_selection(train, test, target):
     # remove cols without variance
     for col in all_numeric_cols:
         if col not in numeric_cols:
+            # print(f'variance drop {col}')
             train.drop(col, axis=1, inplace=True)
 
             if col in test.columns:
                 test.drop(col, axis=1, inplace=True)
 
-    print(f'variance, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+    # print(f'variance, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
     # determine important featuers
     train, test = get_feature_importance(train, test, target)
-    print(f'importance, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+    # print(f'importance, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
     return train, test
 
-# -------- main
+# for timezones
 
+
+def remove_missing_vals(x):
+    remove_list = ['(not set)', 'not available in demo dataset', 'unknown.unknown']
+
+    if x in remove_list:
+        return ''
+    else:
+        return x
+
+
+def free_mem():
+    # return int(virtual_memory().free / 1000000)
+    return virtual_memory()
+
+
+def time_zone_converter(x):
+    try:
+        return pytz.country_timezones(x)[0]
+    except AttributeError:
+        return np.nan
+
+
+def time_localizer(s):
+    # format of series [time,zone]
+
+    try:
+        tz = pytz.timezone(s[1])
+        return pytz.utc.localize(datetime.utcfromtimestamp(s[0]), is_dst=None).astimezone(tz)
+    except:  # noqa
+        return np.nan
+
+
+def map_timezone(x):
+    try:
+        return timezone_dict[x]  # noqa
+    except KeyError:
+        return 'UTC'
+
+
+# -------- main
 
 start_time = time()
 
@@ -411,12 +516,17 @@ else:
 train[unique_id] = range(1, len(train.index) + 1)
 test[unique_id] = range(1, len(test.index) + 1)
 
-print(f'load data, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+# print(train.describe())
+print(f'load data, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
 # specific conversions required
 int_cols = []
 
 float_cols = []
+
+date_cols = []
+
+timestamp_cols = []
 
 for col in int_cols:
     train[col] = train[col].astype(int)
@@ -428,19 +538,33 @@ for col in float_cols:
     if col != target:
         test[col] = test[col].astype(float)
 
+for col in date_cols:
+    train[col] = pd.to_datetime(train[col], format='%Y%m%d', errors='ignore')
+    test[col] = pd.to_datetime(test[col], format='%Y%m%d', errors='ignore')
+
+for col in timestamp_cols:
+    train[col] = pd.to_datetime(train[col], unit='s', errors='ignore')
+    test[col] = pd.to_datetime(test[col], unit='s', errors='ignore')
+
+
 train[target] = train[target].fillna(0)
 
+# store
 train_targets = train[target]
 
 # remove columns with many missing values
 train, test = get_missing_values(train, test, target)
-print(f'missing, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+print(f'missing, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
-#----------
+# train, test = get_expand_dates(train, test, date_cols + timestamp_cols + ['_local_time'])
+
+
+# ----------
 
 all_numeric_cols = [col for col in train.columns
                     if (train[col].dtype == 'int64') | (train[col].dtype == 'float64')]
 all_numeric_cols.remove(unique_id)
+all_numeric_cols.remove(target)
 
 categorical_cols = [col for col in train.columns if train[col].dtype == 'object']
 
@@ -457,6 +581,17 @@ for col in all_numeric_cols:
         if col in test.columns:
             test[col].fillna(mean, inplace=True)
 
+# convert to lowercase
+for col in categorical_cols:
+    train[col] = train[col].apply(lambda x: str(x).lower())
+
+    if col in test.columns:
+        test[col] = test[col].apply(lambda x: str(x).lower())
+
+# replace string nan with np.nan
+train.replace('nan', np.nan, inplace=True)
+test.replace('nan', np.nan, inplace=True)
+
 # replace missing categoricals with mode
 for col in categorical_cols:
     if train[col].isna().any():
@@ -469,23 +604,44 @@ for col in categorical_cols:
 
 # arithmetic features
 train, test = get_arithmetic_features(train, test, target)
-print(f'arithmetic, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+print(f'arithmetic, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+print(unique_id in train.columns)
+# remove collinear variables
+train, test = get_collinear_features(train, test, target)
+print(f'collinear, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+print(unique_id in train.columns)
+
 
 # polynomial features
 train, test = get_polynomial_features(train, test, target)
-print(f'polynomial, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+print(f'polynomial, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+# remove collinear variables
+train, test = get_collinear_features(train, test, target)
+print(f'collinear, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+
+# log features
+train, test = get_log_features(train, test, target)
+print(f'log, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+# remove collinear variables
+train, test = get_collinear_features(train, test, target)
+print(f'collinear, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
 
 # encode categoricals so all numeric
 
 # drop if too many values, encode if few
 # one-hot-encode up to 100 categories, else label encode
 max_categories = train.shape[0] * 0.5
-max_ohe_categories = 100  # use 0 to disable ohe
+max_ohe_categories = 10  # use 0 to disable ohe
 
 too_many_value_categorical_cols = [col for col in categorical_cols
                                    if train[col].nunique() >= max_categories]
-
-# drop if too many value s- usually a unique id column
+# drop if too many value s - usually a unique id column
 train = train.drop(too_many_value_categorical_cols, axis=1)
 test.drop([col for col in too_many_value_categorical_cols
            if col in test.columns], axis=1, inplace=True)
@@ -495,25 +651,63 @@ categorical_cols = np.setdiff1d(categorical_cols, too_many_value_categorical_col
 ohe_categorical_cols = [col for col in categorical_cols
                         if train[col].nunique() <= max_ohe_categories]
 
-label_encode_categorical_cols = [col for col in categorical_cols
-                                 if (train[col].nunique() > max_ohe_categories)
-                                 & (train[col].nunique() < max_categories)]
+rank_encode_categorical_cols = [col for col in categorical_cols if (train[col].nunique() > max_ohe_categories)]
 
-# label encode
-for col in label_encode_categorical_cols:
-    lbl = LabelEncoder()
-    lbl.fit(list(train[col].values.astype('str')) + list(test[col].values.astype('str')))
-    train[col] = lbl.transform(list(train[col].values.astype('str')))
-    test[col] = lbl.transform(list(test[col].values.astype('str')))
+# print('ohe', ohe_categorical_cols)
+# print('rank', rank_encode_categorical_cols)
+
+# generate ranks for categorical features with many unique values
+# using revenue percentage
+
+for col in rank_encode_categorical_cols:
+    print(f'rank {col} uniques {train[col].nunique()}')
+
+    train[col].fillna('unknown', inplace=True)
+    col_list = [target, col]
+
+    df = train[col_list].groupby(col).aggregate({col: ['count'], target: ['sum']}).reset_index()
+    df.columns = [col, f'{col}_count', f'{target}_sum']
+    df['target_perc'] = df[f'{target}_sum'] / df[f'{col}_count']
+    df['rank'] = df['target_perc'].rank(ascending=1)
+
+    replace_dict = {}
+    final_dict = {}
+
+    for k, col_val in enumerate(df[col].values):
+        replace_dict[col_val] = df.iloc[k, 4]
+
+    final_dict[col] = replace_dict
+
+    train.replace(final_dict, inplace=True)
+    test.replace(final_dict, inplace=True)
+
+    last_rank = df['rank'].max() + 1
+
+    # put new test vals last
+    test[col] = test[col].apply(lambda x: x if type(x) is float else last_rank)
+
+    gc.enable()
+    del df, replace_dict, final_dict
+    gc.collect()
+    print(f'mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+print(f'ranked, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
 # one-hot encode & align to have same columns
 train = pd.get_dummies(train, columns=ohe_categorical_cols)
 test = pd.get_dummies(test, columns=ohe_categorical_cols)
 train, test = train.align(test, join='inner', axis=1)
 
-print(f'encoded, cols {len(train.columns)}, {((time() - start_time) / 60):.0f} mins')
+# restore after align
+train[target] = train_targets
 
-#-- feature selection (reduction)
+print(f'encoded, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+# remove collinear variables
+train, test = get_collinear_features(train, test, target)
+print(f'collinear, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+
+# -------- feature selection (reduction)
 
 train, test = get_feature_selection(train, test, target)
 
@@ -526,30 +720,29 @@ test.columns = [col.replace(' ', '_') for col in test.columns.tolist()]
 # kfolds
 folds = KFold(n_splits=n_folds, shuffle=True, random_state=1)
 
-x_train = train.drop(target_key, axis=1)
+x_train = train.drop([target, target_key], axis=1)
 
 if unique_id in x_train.columns:
-    x_train = train.drop(target_key, axis=1)
+    x_train = x_train.drop(unique_id, axis=1)
 
-
-y_train = train_targets
+y_train = train[target]
 x_test = test[x_train.columns]
 
-# pprint(list(x_train.columns))
+pprint(list(x_train.columns))
+
+# Define the search space
+space = {
+    'class_weight': hp.choice('class_weight', [None, 'balanced']),
+    'num_leaves': hp.quniform('num_leaves', 30, 150, 1),
+    'learning_rate': hp.loguniform('learning_rate', np.log(0.01), np.log(0.2)),
+    'subsample_for_bin': hp.quniform('subsample_for_bin', 20000, 300000, 20000),
+    'min_child_samples': hp.quniform('min_child_samples', 20, 500, 5),
+    'reg_alpha': hp.uniform('reg_alpha', 0.0, 1.0),
+    'reg_lambda': hp.uniform('reg_lambda', 0.0, 1.0),
+    'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
+}
 
 if optimize:
-    # define the search space
-    space = {
-        'class_weight': hp.choice('class_weight', [None, 'balanced']),
-        'num_leaves': hp.quniform('num_leaves', 30, 150, 1),
-        'learning_rate': hp.loguniform('learning_rate', np.log(0.01), np.log(0.2)),
-        'subsample_for_bin': hp.quniform('subsample_for_bin', 20000, 300000, 20000),
-        'min_child_samples': hp.quniform('min_child_samples', 20, 500, 5),
-        'reg_alpha': hp.uniform('reg_alpha', 0.0, 1.0),
-        'reg_lambda': hp.uniform('reg_lambda', 0.0, 1.0),
-        'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
-    }
-
     of_connection = open(results_file, 'w')
     writer = csv.writer(of_connection)
     writer.writerow(['iteration', 'score', 'run_time', 'params'])
@@ -565,10 +758,9 @@ if optimize:
     print(f'score {trials_dict[:1][0]["loss"]}')
 
 else:
+
     test_predictions, score = evaluate(optimized_params)
-
     print('score', score)
-
     test['predicted'] = test_predictions
 
     submission = pd.DataFrame({
@@ -577,6 +769,5 @@ else:
     })
 
     submission.to_csv('submission.csv', index=False)
-
 
 print(f'{((time() - start_time) / 60):.0f} mins\a')
