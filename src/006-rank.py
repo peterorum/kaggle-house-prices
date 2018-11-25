@@ -615,12 +615,12 @@ print(unique_id in train.columns)
 
 
 # polynomial features
-train, test = get_polynomial_features(train, test, target)
-print(f'polynomial, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+# train, test = get_polynomial_features(train, test, target)
+# print(f'polynomial, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
-# remove collinear variables
-train, test = get_collinear_features(train, test, target)
-print(f'collinear, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
+# # remove collinear variables
+# train, test = get_collinear_features(train, test, target)
+# print(f'collinear, cols {len(train.columns)}, mem {free_mem()}, {((time() - start_time) / 60):.0f} mins')
 
 
 # log features
