@@ -1,7 +1,6 @@
 # rank columns
-# sample
-# full
-# kaggle
+# full 0.1296
+# kaggle 0.15531
 # minimize score
 
 from datetime import datetime
