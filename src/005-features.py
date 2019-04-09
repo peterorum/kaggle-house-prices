@@ -389,7 +389,8 @@ def get_feature_selection(train, test, target):
 
     return train, test
 
-#-------- main
+# -------- main
+
 
 start_time = time()
 
@@ -403,8 +404,8 @@ if use_sample:
     train = pd.read_csv('../input/train.csv')
     test = pd.read_csv('../input/test.csv')
 else:
-    train = load_df(f'../input/train.csv{zipext}')
-    test = load_df(f'../input/test.csv{zipext}')
+    train = pd.read_csv(f'../input/train.csv{zipext}')
+    test = pd.read_csv(f'../input/test.csv{zipext}')
 
 # add unique id
 train[unique_id] = range(1, len(train.index) + 1)
