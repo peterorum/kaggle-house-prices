@@ -1,6 +1,6 @@
 # feature importance
-# local score 0.0431
-# kaggle score .13857
+# local score 0.0426
+# kaggle score .13383
 # minimize score
 
 import os
