@@ -5,4 +5,8 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
+zip -r submission.csv.zip submission.csv
+
 kaggle competitions submit -c house-prices-advanced-regression-techniques -f submission.csv  -m "$1"
+
+rm submission.csv.zip

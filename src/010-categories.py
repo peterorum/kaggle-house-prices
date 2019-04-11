@@ -1,6 +1,6 @@
 # feature importance
-# local score 0.0426
-# kaggle score .13383
+# local score 0.07653
+# kaggle score .12239
 # minimize score
 
 import os
@@ -41,7 +41,23 @@ def evaluate(train, test, unique_id, target):
 
     print('evaluate')
 
-    lgb_model = lgb.LGBMRegressor(nthread=4, n_jobs=-1, verbose=-1, metric='rmse')
+    # lgb_model = lgb.LGBMRegressor(nthread=4, n_jobs=-1, verbose=-1, metric='rmse')
+
+    lgb_model = lgb.LGBMRegressor(objective='regression',
+                                  nthread=4,
+                                  n_jobs=-1,
+                                  num_leaves=4,
+                                  learning_rate=0.01,
+                                  n_estimators=5000,
+                                  max_bin=200,
+                                  bagging_fraction=0.75,
+                                  bagging_freq=5,
+                                  bagging_seed=7,
+                                  feature_fraction=0.2,
+                                  feature_fraction_seed=7,
+                                  verbose=-1,
+                                  metric='rmse'
+                                  )
 
     x_train = train.drop([target, unique_id], axis=1)
     y_train = train[target]
@@ -80,7 +96,7 @@ def get_many_missing_values(train, test, unique_id, target):
     all_missing = list(set(set(train_missing) | set(test_missing)))
 
     if len(all_missing) > 0:
-        print(f'columns with more than {threshold}% missing values')
+        print(f'columns with more than {threshold * 100}% missing values')
         pprint(all_missing)
 
         train = train.drop(columns=all_missing, axis=1)
@@ -107,9 +123,9 @@ def remove_keys(list, keys):
 # --- replace missing values
 
 
-def replace_missing_values(train, test, unique_id, target):
+def replace_missing_values_with_mean_mode(train, test, unique_id, target):
 
-    print(f'replace_missing_values')
+    print(f'replace_missing_values_with_mean_mode')
 
     numeric_cols = [col for col in train.columns
                     if (train[col].dtype == 'int64') | (train[col].dtype == 'float64')]
@@ -431,6 +447,26 @@ def get_arithmetic_features(train, test, unique_id, target, cols, source_cols):
 def get_custom_features(train, test, unique_id, target):
 
     print(f'get_custom_features')
+
+    for df in [train, test]:
+        df['TotalSF'] = df['TotalBsmtSF'] + df['1stFlrSF'] + df['2ndFlrSF']
+
+        df['Total_sqr_footage'] = (df['BsmtFinSF1'] + df['BsmtFinSF2'] +
+                                   df['1stFlrSF'] + df['2ndFlrSF'])
+
+        df['Total_Bathrooms'] = (df['FullBath'] + (0.5 * df['HalfBath']) +
+                                 df['BsmtFullBath'] + (0.5 * df['BsmtHalfBath']))
+
+        df['Total_porch_sf'] = (df['OpenPorchSF'] + df['3SsnPorch'] +
+                                df['EnclosedPorch'] + df['ScreenPorch'] +
+                                df['WoodDeckSF'])
+
+        df['haspool'] = df['PoolArea'].apply(lambda x: 1 if x > 0 else 0)
+        df['has2ndfloor'] = df['2ndFlrSF'].apply(lambda x: 1 if x > 0 else 0)
+        df['hasgarage'] = df['GarageArea'].apply(lambda x: 1 if x > 0 else 0)
+        df['hasbsmt'] = df['TotalBsmtSF'].apply(lambda x: 1 if x > 0 else 0)
+        df['hasfireplace'] = df['Fireplaces'].apply(lambda x: 1 if x > 0 else 0)
+
     timer()
 
     return train, test
@@ -508,7 +544,7 @@ def run():
         train, test, ['GarageType', 'GarageFinish', 'GarageQual', 'GarageCond',
                       'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2'], 'None')
 
-    train, test = replace_missing_values(train, test, unique_id, target)
+    train, test = replace_missing_values_with_mean_mode(train, test, unique_id, target)
 
     train, test = get_column_differences(train, test, unique_id, target)
 
