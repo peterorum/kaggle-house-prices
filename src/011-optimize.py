@@ -25,7 +25,7 @@ np.set_printoptions(threshold=sys.maxsize)
 is_kaggle = os.environ['HOME'] == '/tmp'
 
 # hyperopt
-optimize = True
+optimize = False
 results_file = 'optimize.csv'
 iteration = 0
 best_score = sys.float_info.max
@@ -41,13 +41,14 @@ best_score = sys.float_info.max
 # }
 
 optimized_params = {
-    'bagging_fraction': 0.5666534548837516,
-    'bagging_freq': 1,
-    'feature_fraction': 0.7311131815929598,
-    'learning_rate': 0.07397021412213724,
-    'max_bin': 105,
-    'n_estimators': 6000,
-    'num_leaves': 25}
+    'bagging_fraction': 0.11043498466294077,
+    'bagging_freq': 0,
+    'feature_fraction': 0.5347561116091114,
+    'learning_rate': 0.08385021213709712,
+    'max_bin': 160,
+    'n_estimators': 8000,
+    'num_leaves': 37
+}
 
 evaluation_dic = {}
 
@@ -637,9 +638,9 @@ def run():
             'learning_rate': hp.loguniform('learning_rate', np.log(0.01), np.log(0.1)),
             'n_estimators': hp.quniform('n_estimators', 2000, 8000, 2000),
             'max_bin': hp.quniform('max_bin', 50, 300, 5),
-            'bagging_fraction': hp.uniform('bagging_fraction', 0.0, 1.0),
+            'bagging_fraction': hp.uniform('bagging_fraction', 0.1, 1),
             'bagging_freq': hp.quniform('bagging_freq', 0, 10, 1),
-            'feature_fraction': hp.uniform('feature_fraction', 0, 1)
+            'feature_fraction': hp.uniform('feature_fraction', 0.1, 1)
         }
 
         of_connection = open(results_file, 'w')
