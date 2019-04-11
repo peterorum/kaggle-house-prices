@@ -3,6 +3,7 @@
 # kaggle score .12239
 # minimize score
 
+import csv
 import os
 import sys  # noqa
 from time import time
@@ -24,19 +25,32 @@ np.set_printoptions(threshold=sys.maxsize)
 is_kaggle = os.environ['HOME'] == '/tmp'
 
 # hyperopt
-optimize = False
+optimize = True
+results_file = 'optimize.csv'
+iteration = 0
+best_score = sys.float_info.max
+
+# optimized_params = {
+#     'bagging_fraction': 0.75,
+#     'bagging_freq': 5,
+#     'feature_fraction': 0.2,
+#     'learning_rate': 0.01,
+#     'max_bin': 200,
+#     'n_estimators': 5000,
+#     'num_leaves': 4,
+# }
 
 optimized_params = {
-    'num_leaves': 4,
-    'learning_rate': 0.01,
-    'n_estimators': 5000,
-    'max_bin': 200,
-    'bagging_fraction': 0.75,
-    'bagging_freq': 5,
-    'bagging_seed': 7,
-    'feature_fraction': 0.2,
-    'feature_fraction_seed': 7,
-}
+    'bagging_fraction': 0.5666534548837516,
+    'bagging_freq': 1,
+    'feature_fraction': 0.7311131815929598,
+    'learning_rate': 0.07397021412213724,
+    'max_bin': 105,
+    'n_estimators': 6000,
+    'num_leaves': 25}
+
+evaluation_dic = {}
+
 
 zipext = ''  # if is_kaggle else '.zip'
 train_file = 'train'  # if is_kaggle else 'sample'
@@ -57,23 +71,15 @@ def evaluate(train, test, unique_id, target, params):
 
     print('evaluate')
 
-    # lgb_model = lgb.LGBMRegressor(objective='regression',
-    #                               nthread=4,
-    #                               n_jobs=-1,
-    #                               num_leaves=4,
-    #                               learning_rate=0.01,
-    #                               n_estimators=5000,
-    #                               max_bin=200,
-    #                               bagging_fraction=0.75,
-    #                               bagging_freq=5,
-    #                               bagging_seed=7,
-    #                               feature_fraction=0.2,
-    #                               feature_fraction_seed=7,
-    #                               verbose=-1,
-    #                               metric='rmse'
-    #                               )
+    # force to int
+    params['num_leaves'] = int(params['num_leaves'])
+    params['bagging_freq'] = int(params['bagging_freq'])
+    params['max_bin'] = int(params['max_bin'])
+    params['n_estimators'] = int(params['n_estimators'])
 
-    lgb_model = lgb.LGBMRegressor(nthread=4, n_jobs=-1, verbose=-1, metric='rmse')
+    lgb_model = lgb.LGBMRegressor(nthread=4, n_jobs=-1, verbose=-1, metric='rmse',
+                                  bagging_seed=7, feature_fraction_seed=7)
+
     lgb_model.set_params(**params)
 
     x_train = train.drop([target, unique_id], axis=1)
@@ -91,6 +97,41 @@ def evaluate(train, test, unique_id, target, params):
     timer()
 
     return test_predictions, train_score
+
+# hyperopt optimization
+
+
+def objective(params):
+
+    global results_file, iteration, best_score, evaluation_dic
+    iteration += 1
+
+    start = time()
+
+    _, score = evaluate(evaluation_dic['train'], evaluation_dic['test'],
+                        evaluation_dic['unique_id'], evaluation_dic['target'], params)
+
+    run_time = time() - start
+
+    # save results
+    of_connection = open(results_file, 'a')
+    writer = csv.writer(of_connection)
+    writer.writerow([iteration, score, run_time, params])
+    of_connection.close()
+
+    # save trials for resumption
+    # with open('trials.json', 'w') as f:
+    #     # might be trials_dict to be saved
+    #     f.write(json.dumps(trials))
+
+    best_score = min(best_score, score)
+
+    print(f'iteration {iteration}, score {score}, best {best_score}, timer {run_time}')
+
+    # score must be to minimize
+
+    return {'loss': score, 'params': params, 'iteration': iteration,
+            'train_time': run_time, 'status': STATUS_OK}
 
 # --- missing values
 
@@ -584,29 +625,36 @@ def run():
     if optimize:
         # optimization runs
 
+        global evaluation_dic
+
         # hyperopt
         max_evals = 200 if is_kaggle else 100
-        results_file = 'optimize.csv'
-        iteration = 0
-        best_score = sys.float_info.max
         trials = Trials()
 
         # define the search space
         space = {
-            'class_weight': hp.choice('class_weight', [None, 'balanced']),
-            'num_leaves': hp.quniform('num_leaves', 30, 150, 1),
-            'learning_rate': hp.loguniform('learning_rate', np.log(0.01), np.log(0.2)),
-            'subsample_for_bin': hp.quniform('subsample_for_bin', 20000, 300000, 20000),
-            'min_child_samples': hp.quniform('min_child_samples', 20, 500, 5),
-            'reg_alpha': hp.uniform('reg_alpha', 0.0, 1.0),
-            'reg_lambda': hp.uniform('reg_lambda', 0.0, 1.0),
-            'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
+            'num_leaves': hp.quniform('num_leaves', 4, 50, 1),
+            'learning_rate': hp.loguniform('learning_rate', np.log(0.01), np.log(0.1)),
+            'n_estimators': hp.quniform('n_estimators', 2000, 8000, 2000),
+            'max_bin': hp.quniform('max_bin', 50, 300, 5),
+            'bagging_fraction': hp.uniform('bagging_fraction', 0.0, 1.0),
+            'bagging_freq': hp.quniform('bagging_freq', 0, 10, 1),
+            'feature_fraction': hp.uniform('feature_fraction', 0, 1)
         }
 
         of_connection = open(results_file, 'w')
         writer = csv.writer(of_connection)
         writer.writerow(['iteration', 'score', 'run_time', 'params'])
         of_connection.close()
+
+        # store global params
+
+        evaluation_dic = {
+            'train': train,
+            'test': test,
+            'target': target,
+            'unique_id': unique_id
+        }
 
         best = fmin(fn=objective, space=space, algo=tpe.suggest,
                     max_evals=max_evals, trials=trials)
