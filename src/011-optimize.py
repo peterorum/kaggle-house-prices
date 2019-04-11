@@ -10,6 +10,7 @@ from pprint import pprint  # noqa
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from hyperopt import STATUS_OK, fmin, hp, tpe, Trials
 from sklearn.metrics import mean_squared_error
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.model_selection import train_test_split
@@ -21,6 +22,21 @@ pd.set_option('display.width', 2000)
 np.set_printoptions(threshold=sys.maxsize)
 
 is_kaggle = os.environ['HOME'] == '/tmp'
+
+# hyperopt
+optimize = False
+
+optimized_params = {
+    'num_leaves': 4,
+    'learning_rate': 0.01,
+    'n_estimators': 5000,
+    'max_bin': 200,
+    'bagging_fraction': 0.75,
+    'bagging_freq': 5,
+    'bagging_seed': 7,
+    'feature_fraction': 0.2,
+    'feature_fraction_seed': 7,
+}
 
 zipext = ''  # if is_kaggle else '.zip'
 train_file = 'train'  # if is_kaggle else 'sample'
@@ -37,25 +53,28 @@ def timer():
     last_time = time()
 
 
-def evaluate(train, test, unique_id, target):
+def evaluate(train, test, unique_id, target, params):
 
     print('evaluate')
 
-    lgb_model = lgb.LGBMRegressor(objective='regression',
-                                  nthread=4,
-                                  n_jobs=-1,
-                                  num_leaves=4,
-                                  learning_rate=0.01,
-                                  n_estimators=5000,
-                                  max_bin=200,
-                                  bagging_fraction=0.75,
-                                  bagging_freq=5,
-                                  bagging_seed=7,
-                                  feature_fraction=0.2,
-                                  feature_fraction_seed=7,
-                                  verbose=-1,
-                                  metric='rmse'
-                                  )
+    # lgb_model = lgb.LGBMRegressor(objective='regression',
+    #                               nthread=4,
+    #                               n_jobs=-1,
+    #                               num_leaves=4,
+    #                               learning_rate=0.01,
+    #                               n_estimators=5000,
+    #                               max_bin=200,
+    #                               bagging_fraction=0.75,
+    #                               bagging_freq=5,
+    #                               bagging_seed=7,
+    #                               feature_fraction=0.2,
+    #                               feature_fraction_seed=7,
+    #                               verbose=-1,
+    #                               metric='rmse'
+    #                               )
+
+    lgb_model = lgb.LGBMRegressor(nthread=4, n_jobs=-1, verbose=-1, metric='rmse')
+    lgb_model.set_params(**params)
 
     x_train = train.drop([target, unique_id], axis=1)
     y_train = train[target]
@@ -562,15 +581,53 @@ def run():
 
     # ----------
 
-    test_predictions, train_score = evaluate(train, test, unique_id, target)
+    if optimize:
+        # optimization runs
 
-    print('score', train_score)
+        # hyperopt
+        max_evals = 200 if is_kaggle else 100
+        results_file = 'optimize.csv'
+        iteration = 0
+        best_score = sys.float_info.max
+        trials = Trials()
 
-    test[target] = np.expm1(test_predictions)
+        # define the search space
+        space = {
+            'class_weight': hp.choice('class_weight', [None, 'balanced']),
+            'num_leaves': hp.quniform('num_leaves', 30, 150, 1),
+            'learning_rate': hp.loguniform('learning_rate', np.log(0.01), np.log(0.2)),
+            'subsample_for_bin': hp.quniform('subsample_for_bin', 20000, 300000, 20000),
+            'min_child_samples': hp.quniform('min_child_samples', 20, 500, 5),
+            'reg_alpha': hp.uniform('reg_alpha', 0.0, 1.0),
+            'reg_lambda': hp.uniform('reg_lambda', 0.0, 1.0),
+            'colsample_bytree': hp.uniform('colsample_bytree', 0.6, 1.0)
+        }
 
-    predictions = test[[unique_id, target]]
+        of_connection = open(results_file, 'w')
+        writer = csv.writer(of_connection)
+        writer.writerow(['iteration', 'score', 'run_time', 'params'])
+        of_connection.close()
 
-    predictions.to_csv('submission.csv', index=False)
+        best = fmin(fn=objective, space=space, algo=tpe.suggest,
+                    max_evals=max_evals, trials=trials)
+
+        print('best', best)
+
+        # pprint(trials.results)
+        trials_dict = sorted(trials.results, key=lambda x: x['loss'])
+        print(f'score {trials_dict[:1][0]["loss"]}')
+
+    else:
+        # single run
+        test_predictions, train_score = evaluate(train, test, unique_id, target, optimized_params)
+
+        print('score', train_score)
+
+        test[target] = np.expm1(test_predictions)
+
+        predictions = test[[unique_id, target]]
+
+        predictions.to_csv('submission.csv', index=False)
 
 
 # -------- main
