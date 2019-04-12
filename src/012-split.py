@@ -1,6 +1,6 @@
 # train/test split
-# local score 0.1344
-# kaggle score .13208
+# local score 0.12388
+# kaggle score .13162
 # minimize score
 
 import csv
@@ -25,7 +25,7 @@ np.set_printoptions(threshold=sys.maxsize)
 is_kaggle = os.environ['HOME'] == '/tmp'
 
 # hyperopt
-optimize = True
+optimize = False
 results_file = 'optimize.csv'
 iteration = 0
 best_score = sys.float_info.max
@@ -41,14 +41,13 @@ best_score = sys.float_info.max
 # }
 
 optimized_params = {
-    'bagging_fraction': 0.11043498466294077,
-    'bagging_freq': 0,
-    'feature_fraction': 0.5347561116091114,
-    'learning_rate': 0.08385021213709712,
-    'max_bin': 160,
-    'n_estimators': 8000,
-    'num_leaves': 37
-}
+    'bagging_fraction': 0.34164148988691145,
+    'bagging_freq': 1.0,
+    'feature_fraction': 0.6838704106971366,
+    'learning_rate': 0.020563710265044232,
+    'max_bin': 110.0,
+    'n_estimators': 2000.0,
+    'num_leaves': 44.0}
 
 evaluation_dic = {}
 
