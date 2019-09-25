@@ -50,6 +50,9 @@ def evaluate(train, test, unique_id, target):
 
     model.fit(x_train, y_train)
 
+    print(model.feature_importances_)
+    sys.exit(0)
+
     train_predictions = model.predict(x_validate)
     train_score = np.sqrt(mean_squared_error(np.log(train_predictions), np.log(y_validate)))
 
