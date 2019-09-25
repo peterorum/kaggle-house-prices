@@ -12,6 +12,8 @@ from sklearn.model_selection import train_test_split
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import LabelEncoder
+
 
 start_time = time()
 last_time = time()
@@ -42,28 +44,56 @@ def run():
     numeric_cols = [col for col in X_train_full.columns
                     if (X_train_full[col].dtype == 'int64') | (X_train_full[col].dtype == 'float64')]
 
-    features = numeric_cols
-    features.remove(target)
+    categorical_cols = [col for col in X_train_full.columns if X_train_full[col].dtype == 'object']
 
-    X = X_train_full[features].copy()
-    X_test = X_test_full[features].copy()
+    numeric_cols.remove(target)
+
+    X_train_full_numeric = X_train_full[numeric_cols]
+    X_train_full_categorical = pd.DataFrame(X_train_full[categorical_cols])
+    X_test_full_numeric = X_test_full[numeric_cols]
+    X_test_full_categorical = pd.DataFrame(X_test_full[categorical_cols])
 
     # ----------------- missing values
 
-    cols_with_missing_values = [col for col in features
-                                if X[col].isnull().any()]
-
     # impute missing values
 
-    column_names = X.columns
-
     my_imputer = SimpleImputer()
-    X = pd.DataFrame(my_imputer.fit_transform(X))
-    X_test = pd.DataFrame(my_imputer.transform(X_test))
 
-    # restore column names
-    X.columns = column_names
-    X_test.columns = column_names
+    X_numeric = pd.DataFrame(my_imputer.fit_transform(X_train_full_numeric), columns=numeric_cols)
+    X_test_numeric = pd.DataFrame(my_imputer.transform(X_test_full_numeric), columns=numeric_cols)
+
+    # replace string nan with np.nan
+    X_train_full_categorical.replace('nan', np.nan, inplace=True)
+    X_test_full_categorical.replace('nan', np.nan, inplace=True)
+
+    # replace missing categoricals with mode
+    for col in categorical_cols:
+        if X_train_full_categorical[col].isna().any() or X_test_full_categorical[col].isna().any():
+            mode = X_train_full_categorical[col].mode()[0]
+
+            X_train_full_categorical[col].fillna(mode, inplace=True)
+
+            if col in X_test_full_categorical.columns:
+                X_test_full_categorical[col].fillna(mode, inplace=True)
+
+    # ---------------- categorical columns
+
+    label_encoder = LabelEncoder()
+
+    for col in categorical_cols:
+        X_train_full_categorical[col] = label_encoder.fit_transform(X_train_full_categorical[col])
+        X_test_full_categorical[col] = label_encoder.transform(X_test_full_categorical[col])
+
+    # ---------------- join back together
+
+    X = pd.concat([X_numeric, X_train_full_categorical], axis=1)
+
+    X_test = pd.concat([X_test_numeric, X_test_full_categorical], axis=1)
+
+    print(X)
+    print(y)
+
+    sys.exit(0)
 
     # ---------------- split into training & validation
     X_train, X_validate, y_train, y_validate = train_test_split(X, y, train_size=0.8, test_size=0.2,
