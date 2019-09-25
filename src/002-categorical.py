@@ -6,6 +6,7 @@
 import csv
 import os
 import sys  # noqa
+import operator
 from time import time
 from pprint import pprint  # noqa
 import numpy as np
@@ -50,9 +51,6 @@ def evaluate(train, test, unique_id, target):
 
     model.fit(x_train, y_train)
 
-    print(model.feature_importances_)
-    sys.exit(0)
-
     train_predictions = model.predict(x_validate)
     train_score = np.sqrt(mean_squared_error(np.log(train_predictions), np.log(y_validate)))
 
@@ -61,6 +59,26 @@ def evaluate(train, test, unique_id, target):
     timer()
 
     return test_predictions, train_score
+
+
+# get top 10 important features
+
+
+def get_important_features(train, unique_id, target):
+
+    print('get_important_features')
+
+    model = XGBRegressor(random_state=0)
+
+    model.fit(train.drop([unique_id, target], axis=1), train[target])
+
+    important_features = model.get_booster().get_score(importance_type='weight')
+    important_features = sorted(important_features.items(), key=operator.itemgetter(1), reverse=True)
+    important_features = [x[0] for x in important_features[0:10]]
+
+    timer()
+
+    return important_features
 
 
 # --- remove keys
@@ -242,6 +260,7 @@ def add_custom_features(train, test, unique_id, target):
 
     return train, test
 
+
 # --------------------- run
 
 
@@ -255,12 +274,14 @@ def run():
     train = pd.read_csv(f'../input/{train_file}.csv{zipext}')
     test = pd.read_csv(f'../input/test.csv{zipext}')
 
+    original_columns = train.columns.tolist()
+
     # ----------
 
     train, test = clear_missing_values(train, test, ['GarageYrBlt', 'GarageArea', 'GarageCars'], 0)
     train, test = clear_missing_values(
         train, test, ['GarageType', 'GarageFinish', 'GarageQual', 'GarageCond', 'FireplaceQu', 'Alley', 'BsmtQual',
-                      'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'FireplaceQu', 'PoolQC', 'Fence', 'MiscFeature'], 'NA')
+                      'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'PoolQC', 'Fence', 'MiscFeature'], 'NA')
 
     train, test = convert_numeric_categories(train, test, ['MSSubClass'])
 
@@ -269,6 +290,8 @@ def run():
     train, test = add_custom_features(train, test, unique_id, target)
 
     train, test = encode_categoric_data(train, test, unique_id, target)
+
+    important_features = get_important_features(train, unique_id, target)
 
     # ----------
 
